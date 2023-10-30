@@ -1,0 +1,60 @@
+.before_script: &before_script
+  before_script:
+    - 'which ssh-agent || ( apt-get install -qq openssh-client )'
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan $HPC_ADDRESS >> ~/.ssh/known_hosts
+    - chmod 644 ~/.ssh/known_hosts
+
+
+docker-build:
+  # Use the official docker image.
+  image: docker:23.0.5
+  stage: build
+  services:
+    - name: docker:23.0.5-dind
+  before_script:
+    - docker login -u "$CONTAINER_REGISTRY_USERNAME" -p "$CONTAINER_REGISTRY_PASSWORD" $CONTAINER_REGISTRY_HOST
+    - docker info
+  script:
+    - docker build --platform=linux/amd64 --pull -t "$CONTAINER_REGISTRY_REPOSITORY" .
+    - docker push "$CONTAINER_REGISTRY_REPOSITORY"
+  # Run this job in a branch where a Dockerfile exists and only on main and master branch
+  rules:
+      - if: '$CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_REF_NAME == "master"'
+      - exists:
+        - Dockerfile
+
+hpc-deploy:
+  stage: deploy
+  <<: *before_script
+  script:
+    - chmod +x build-singularity-image.sh
+    - ./build-singularity-image.sh
+  when: manual # This job will only be executed when manually triggered through the GitLab UI
+  allow_failure: true  # Optional, set this to 'false' if you want the pipeline to fail if this manual job is not executed
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_REF_NAME == "master"'
+    - exists:
+        - build-singularity-image.sh
+
+pipeline-run:
+  stage: .post
+  <<: *before_script
+  script:
+    - chmod +x submit-batch-job.sh
+    - ./submit-batch-job.sh
+  when: manual
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "main" || $CI_COMMIT_REF_NAME == "master"'
+    - exists:
+        - batch-job-file.sh
+        - submit-batch-job.sh
+
+
+
+
+
